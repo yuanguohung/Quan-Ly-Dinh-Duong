@@ -257,10 +257,9 @@ Project này được phân phối dưới MIT License. Xem [LICENSE](LICENSE) �
 
 ## 📞 Contact & Support
 
-- **Author**: [Your Name]
-- **Email**: your.email@domain.com
-- **University**: [Your University Name]
-- **Supervisor**: [Supervisor Name]
+- **Author**: Nguyễn Quốc Hùng
+- **Email**: yuanguohung@gmail.com
+- **University**: Thu Dau Mot University
 - **Project Type**: Graduation Thesis - Computer Science
 
 ---
