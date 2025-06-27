@@ -36,25 +36,14 @@ const MEAL_CATEGORIES = [
   { id: 'snack', name: 'Đồ ăn nhẹ', icon: 'fast-food', color: colors.secondary }
 ];
 
-const QUICK_ADD_FOODS = [
-  { name: 'Cơm trắng (1 chén)', calories: 205, protein: 4, carbs: 45, fat: 0 },
-  { name: 'Thịt gà luộc (100g)', calories: 165, protein: 31, carbs: 0, fat: 4 },
-  { name: 'Trứng gà (1 quả)', calories: 68, protein: 6, carbs: 1, fat: 5 },
-  { name: 'Chuối (1 quả)', calories: 89, protein: 1, carbs: 23, fat: 0 },
-  { name: 'Bánh mì (1 ổ)', calories: 245, protein: 8, carbs: 49, fat: 3 },
-  { name: 'Sữa (1 ly 250ml)', calories: 122, protein: 8, carbs: 12, fat: 5 },
-];
-
 export default function AddMealScreen() {
   const [name, setName] = useState('');
   const [calories, setCalories] = useState('');
   const [protein, setProtein] = useState('');
   const [carbs, setCarbs] = useState('');
-  const [fat, setFat] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState(MEAL_CATEGORIES[0]);
+  const [fat, setFat] = useState('');  const [selectedCategory, setSelectedCategory] = useState(MEAL_CATEGORIES[0]);
   const [meals, setMeals] = useState<Meal[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [showFoodDatabase, setShowFoodDatabase] = useState(false);
   const router = useRouter();
 
@@ -135,16 +124,8 @@ export default function AddMealScreen() {
               console.error('Lỗi khi xóa:', error);
             }
           }
-        }
-      ]
+        }      ]
     );
-  };  const quickAddFood = (food: typeof QUICK_ADD_FOODS[0]) => {
-    setName(food.name);
-    setCalories(food.calories.toString());
-    setProtein(food.protein.toString());
-    setCarbs(food.carbs.toString());
-    setFat(food.fat.toString());
-    setShowQuickAdd(false);
   };
 
   const handleSelectFromDatabase = (food: FoodItem) => {
@@ -184,39 +165,9 @@ export default function AddMealScreen() {
             >
               <Ionicons name="library" size={20} color={colors.primary} />
               <Text style={styles.databaseButtonText}>Cơ sở dữ liệu</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.quickAddButton}
-              onPress={() => setShowQuickAdd(!showQuickAdd)}
-            >
-              <Ionicons 
-                name={showQuickAdd ? "close" : "flash"} 
-                size={20} 
-                color={colors.primary} 
-              />
-              <Text style={styles.quickAddText}>Thêm nhanh</Text>
-            </TouchableOpacity>
-          </View>
+            </TouchableOpacity>          </View>
         </View>
 
-        {/* Quick Add Section */}
-        {showQuickAdd && (
-          <View style={styles.quickAddSection}>
-            <Text style={styles.sectionTitle}>Món ăn phổ biến</Text>
-            <View style={styles.quickFoodGrid}>
-              {QUICK_ADD_FOODS.map((food, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.quickFoodItem}
-                  onPress={() => quickAddFood(food)}
-                >
-                  <Text style={styles.quickFoodName}>{food.name}</Text>
-                  <Text style={styles.quickFoodCalories}>{food.calories} kcal</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
         {/* Form thêm món ăn */}
         <View style={styles.formCard}>
           <Text style={styles.sectionTitle}>Thêm món ăn mới</Text>
@@ -378,58 +329,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
     paddingTop: 10,
-  },
-  headerTitle: {
+  },  headerTitle: {
     fontSize: 28,
     fontWeight: '700',
     color: colors.text,
   },
-  quickAddButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.card,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.primary,
-  },
-  quickAddText: {
-    color: colors.primary,
-    fontWeight: '600',
-    marginLeft: 6,
-    fontSize: 14,
-  },
-  quickAddSection: {
-    backgroundColor: colors.card,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  quickFoodGrid: {
-    gap: 8,
-  },
-  quickFoodItem: {
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  quickFoodName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: 4,
-  },
-  quickFoodCalories: {
-    fontSize: 12,
-    color: colors.calories,
-    fontWeight: '500',
-  },  formCard: {
+  formCard: {
     backgroundColor: colors.card,
     borderRadius: 16,
     padding: 20,

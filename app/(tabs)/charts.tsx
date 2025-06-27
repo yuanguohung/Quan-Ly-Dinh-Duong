@@ -11,7 +11,10 @@ import {
 import { LineChart, BarChart, PieChart, ProgressChart } from 'react-native-chart-kit';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { colors } from '@/constants/colors';
+import { useUser, useUserProfile } from '@/contexts/UserContext';
+import { UserService } from '@/services/userService';
 
 interface Meal {
   id: string;
@@ -82,6 +85,10 @@ const getWeekDates = () => {
 };
 
 export default function ChartsScreen() {
+  const { user } = useUser();
+  const { userProfile } = useUserProfile();
+  const router = useRouter();
+  
   const [meals, setMeals] = useState<Meal[]>([]);
   const [dailyGoals, setDailyGoals] = useState<DailyGoals>({
     calories: 2000,
@@ -91,19 +98,49 @@ export default function ChartsScreen() {
   });
   const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month'>('week');
   const [dailyData, setDailyData] = useState<DailyData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
+  // Debug effect
   useEffect(() => {
+    console.log('ChartsScreen - Component mounted');
+    console.log('ChartsScreen - user:', user?.email);
+    console.log('ChartsScreen - userProfile:', userProfile);
+    console.log('ChartsScreen - meals count:', meals.length);
+    console.log('ChartsScreen - dailyData count:', dailyData.length);
+    console.log('ChartsScreen - loading:', loading);
+  }, [user, userProfile, meals, dailyData, loading, error]);  useEffect(() => {
+    console.log('ChartsScreen - loadData called');
     loadData();
   }, []);
 
   useEffect(() => {
+    console.log('ChartsScreen - processDailyData called, meals:', meals.length);
     processDailyData();
   }, [meals, selectedPeriod]);
 
+  // Load goals from Firebase when userProfile changes
+  useEffect(() => {
+    if (userProfile?.goals) {
+      console.log('ChartsScreen - Loading goals from Firebase profile');
+      setDailyGoals({
+        calories: userProfile.goals.calories || 2000,
+        protein: userProfile.goals.protein || 150,
+        carbs: userProfile.goals.carbs || 250,
+        fat: userProfile.goals.fat || 65,
+      });
+    }
+  }, [userProfile]);
   const loadData = async () => {
     try {
+      console.log('ChartsScreen - Loading data...');
+      setLoading(true);
+      setError(null);
+      
       // Load meals
       const storedMeals = await AsyncStorage.getItem('meals');
+      console.log('ChartsScreen - storedMeals:', storedMeals ? 'Found' : 'Not found');
+      
       if (storedMeals) {
         const parsedMeals = JSON.parse(storedMeals);
         if (Array.isArray(parsedMeals)) {
@@ -114,12 +151,15 @@ export default function ChartsScreen() {
             typeof meal.carbs === 'number' &&
             typeof meal.fat === 'number'
           );
+          console.log('ChartsScreen - Valid meals loaded:', validMeals.length);
           setMeals(validMeals);
         }
       }
 
       // Load goals
       const storedGoals = await AsyncStorage.getItem('dailyGoals');
+      console.log('ChartsScreen - storedGoals:', storedGoals ? 'Found' : 'Not found');
+      
       if (storedGoals) {
         const parsedGoals = JSON.parse(storedGoals);
         if (parsedGoals) {
@@ -129,10 +169,14 @@ export default function ChartsScreen() {
             carbs: safeNumber(parsedGoals.carbs) || 250,
             fat: safeNumber(parsedGoals.fat) || 65,
           });
+          console.log('ChartsScreen - Goals loaded:', parsedGoals);
         }
       }
     } catch (error) {
-      console.error('Lỗi khi tải dữ liệu:', error);
+      console.error('ChartsScreen - Error loading data:', error);
+      setError('Lỗi khi tải dữ liệu: ' + (error as Error).message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -291,8 +335,7 @@ export default function ChartsScreen() {
   const macroDistribution = getMacroDistribution();
   const caloriesLineData = getCaloriesLineData();
   const proteinBarData = getProteinBarData();
-  
-  const weeklyCalories = dailyData.slice(-7).reduce((sum, day) => sum + safeNumber(day.calories), 0);
+    const weeklyCalories = dailyData.slice(-7).reduce((sum, day) => sum + safeNumber(day.calories), 0);
   const avgCalories = Math.round(weeklyCalories / 7);
   const weeklyProtein = dailyData.slice(-7).reduce((sum, day) => sum + safeNumber(day.protein), 0);
   const weeklyMeals = meals.filter(meal => {
@@ -302,6 +345,31 @@ export default function ChartsScreen() {
     return mealDate >= weekAgo;
   }).length;
 
+  // Loading state
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Ionicons name="hourglass-outline" size={60} color={colors.primary} />
+        <Text style={styles.loadingText}>Đang tải dữ liệu thống kê...</Text>
+      </View>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <View style={styles.errorContainer}>
+        <Ionicons name="alert-circle-outline" size={60} color={colors.error} />
+        <Text style={styles.errorTitle}>Lỗi tải dữ liệu</Text>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={loadData}>
+          <Text style={styles.retryText}>Thử lại</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Empty state
   if (meals.length === 0) {
     return (
       <View style={styles.emptyContainer}>
@@ -309,18 +377,112 @@ export default function ChartsScreen() {
         <Text style={styles.emptyTitle}>Chưa có dữ liệu thống kê</Text>
         <Text style={styles.emptyText}>
           Hãy thêm một số món ăn để xem biểu đồ thống kê dinh dưỡng của bạn
-        </Text>
+        </Text>        <TouchableOpacity style={styles.addDataButton} onPress={() => {
+          // Navigate to add meal screen
+          router.push('/(tabs)/add');
+        }}>
+          <Text style={styles.addDataText}>Thêm món ăn đầu tiên</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Header */}
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Thống kê dinh dưỡng</Text>
-        <Text style={styles.headerSubtitle}>Theo dõi tiến độ của bạn</Text>
-      </View>
+        <Text style={styles.headerSubtitle}>
+          {userProfile ? 
+            `${userProfile.displayName || user?.email} - ${userProfile.weight}kg, ${userProfile.height}cm` :
+            'Theo dõi tiến độ của bạn'
+          }
+        </Text>
+        
+        {/* User Info Card */}
+        {userProfile && (
+          <View style={styles.userInfoCard}>
+            <View style={styles.userInfoRow}>
+              <View style={styles.userInfoItem}>
+                <Ionicons name="person" size={16} color={colors.primary} />
+                <Text style={styles.userInfoText}>{userProfile.gender === 'male' ? 'Nam' : userProfile.gender === 'female' ? 'Nữ' : 'Khác'}</Text>
+              </View>
+              <View style={styles.userInfoItem}>
+                <Ionicons name="fitness" size={16} color={colors.primary} />
+                <Text style={styles.userInfoText}>
+                  {userProfile.activityLevel === 'sedentary' ? 'Ít vận động' :
+                   userProfile.activityLevel === 'light' ? 'Nhẹ' :
+                   userProfile.activityLevel === 'moderate' ? 'Vừa' :
+                   userProfile.activityLevel === 'active' ? 'Nhiều' : 'Cao'}
+                </Text>
+              </View>
+              <View style={styles.userInfoItem}>
+                <Ionicons name="calculator" size={16} color={colors.primary} />
+                <Text style={styles.userInfoText}>BMR: ~{Math.round(UserService.calculateBMR(userProfile))}</Text>
+              </View>
+            </View>
+          </View>
+        )}
+        
+        {/* Debug Info */}
+        <TouchableOpacity 
+          style={styles.debugButton}
+          onPress={() => {
+            Alert.alert('Debug Charts', `
+User: ${user?.email || 'Not logged in'}
+Profile: ${userProfile ? 'Loaded' : 'Not loaded'}
+Meals: ${meals.length}
+Daily Data: ${dailyData.length}
+Weekly Calories: ${weeklyCalories}
+Weekly Meals: ${weeklyMeals}
+Loading: ${loading}
+Error: ${error || 'None'}
+Goals from Profile: ${userProfile?.goals ? 'Yes' : 'No'}
+            `);
+          }}
+        >
+          <Text style={styles.debugButtonText}>Debug Info</Text>
+        </TouchableOpacity>
+      </View>      {/* Personalized Insights */}
+      {userProfile && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="bulb" size={24} color={colors.warning} />
+            <Text style={styles.sectionTitle}>Thông tin cá nhân hóa</Text>
+          </View>
+          
+          <View style={styles.insightsContainer}>
+            <View style={styles.insightItem}>
+              <Ionicons name="speedometer" size={16} color={colors.primary} />
+              <Text style={styles.insightText}>
+                BMR: {Math.round(UserService.calculateBMR(userProfile))} kcal/ngày
+              </Text>
+            </View>
+            
+            <View style={styles.insightItem}>
+              <Ionicons name="flame" size={16} color={colors.calories} />
+              <Text style={styles.insightText}>
+                TDEE: ~{Math.round(UserService.calculateTDEE(userProfile))} kcal/ngày
+              </Text>
+            </View>
+              <View style={styles.insightItem}>
+              <Ionicons name="flag" size={16} color={colors.success} />
+              <Text style={styles.insightText}>
+                Mục tiêu: {userProfile.goals?.type === 'lose' ? 'Giảm cân' : 
+                          userProfile.goals?.type === 'gain' ? 'Tăng cân' : 'Duy trì'}
+              </Text>
+            </View>
+            
+            {userProfile.goals?.targetWeight && (
+              <View style={styles.insightItem}>
+                <Ionicons name="trending-up" size={16} color={colors.info} />
+                <Text style={styles.insightText}>
+                  Cân nặng mục tiêu: {userProfile.goals.targetWeight}kg
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+      )}
 
       {/* Period Selector */}
       {renderPeriodSelector()}
@@ -426,9 +588,7 @@ export default function ChartsScreen() {
             yAxisSuffix="g"
           />
         </View>
-      </View>
-
-      {/* Weekly Summary */}
+      </View>      {/* Weekly Summary */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Ionicons name="calendar" size={24} color={colors.primary} />
@@ -460,6 +620,51 @@ export default function ChartsScreen() {
             <Text style={styles.summaryLabel}>Món ăn</Text>
           </View>
         </View>
+        
+        {/* Progress vs Goals */}
+        {userProfile && (
+          <View style={styles.goalComparisonContainer}>
+            <Text style={styles.goalComparisonTitle}>So sánh với mục tiêu</Text>
+            
+            <View style={styles.goalComparisonItem}>
+              <Text style={styles.goalComparisonLabel}>Calories trung bình:</Text>
+              <Text style={[
+                styles.goalComparisonValue,
+                { color: avgCalories > dailyGoals.calories ? colors.warning : colors.success }
+              ]}>
+                {avgCalories} / {dailyGoals.calories} kcal
+              </Text>
+            </View>
+            
+            <View style={styles.goalComparisonItem}>
+              <Text style={styles.goalComparisonLabel}>Protein trung bình:</Text>
+              <Text style={[
+                styles.goalComparisonValue,
+                { color: Math.round(weeklyProtein/7) > dailyGoals.protein ? colors.success : colors.warning }
+              ]}>
+                {Math.round(weeklyProtein/7)} / {dailyGoals.protein} g
+              </Text>
+            </View>
+            
+            {avgCalories < dailyGoals.calories * 0.8 && (
+              <View style={styles.warningMessage}>
+                <Ionicons name="warning" size={16} color={colors.warning} />
+                <Text style={styles.warningText}>
+                  Bạn đang ăn ít hơn mức khuyến nghị. Hãy thêm món ăn!
+                </Text>
+              </View>
+            )}
+            
+            {avgCalories > dailyGoals.calories * 1.2 && (
+              <View style={styles.warningMessage}>
+                <Ionicons name="alert-circle" size={16} color={colors.error} />
+                <Text style={styles.warningText}>
+                  Bạn đang ăn nhiều hơn mục tiêu. Cân nhắc điều chỉnh!
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
       </View>
 
       <View style={{ height: 100 }} />
@@ -597,11 +802,163 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 12,
     textAlign: 'center',
-  },
-  emptyText: {
+  },  emptyText: {
     fontSize: 16,
     color: colors.textSecondary,
     textAlign: 'center',
     lineHeight: 24,
+    marginBottom: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.backgroundSecondary,
+    padding: 40,
+  },
+  loadingText: {
+    fontSize: 16,
+    color: colors.textSecondary,
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.backgroundSecondary,
+    padding: 40,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: colors.error,
+    marginTop: 16,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  errorText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  retryButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryText: {
+    color: colors.background,
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  addDataButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },  addDataText: {
+    color: colors.background,
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  userInfoCard: {
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 12,
+    width: '100%',
+  },
+  userInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+  },
+  userInfoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+  },
+  userInfoText: {
+    fontSize: 12,
+    color: colors.text,
+    marginLeft: 4,
+    fontWeight: '500',
+  },
+  debugButton: {
+    backgroundColor: colors.warning,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 6,
+    marginTop: 8,
+  },  debugButtonText: {
+    color: colors.background,
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  insightsContainer: {
+    marginTop: 8,
+  },
+  insightItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 8,
+    marginBottom: 6,
+  },  insightText: {
+    fontSize: 14,
+    color: colors.text,
+    marginLeft: 8,
+    flex: 1,
+  },
+  goalComparisonContainer: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 12,
+  },
+  goalComparisonTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: colors.text,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  goalComparisonItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  goalComparisonLabel: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  goalComparisonValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  warningMessage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    padding: 10,
+    backgroundColor: colors.warning + '20',
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.warning,
+  },
+  warningText: {
+    fontSize: 13,
+    color: colors.text,
+    marginLeft: 8,
+    flex: 1,
+    lineHeight: 18,
   },
 });

@@ -19,6 +19,9 @@ import { auth } from '@/firebaseConfig';
 import { signOut } from 'firebase/auth';
 import { SecureStoreManager } from '@/utils/secureStore';
 import * as LocalAuthentication from 'expo-local-authentication';
+import { useUser, useUserProfile, usePersonalizedRecommendations } from '@/contexts/UserContext';
+import { UserService } from '@/services/userService';
+import PersonalInfoModal from '@/components/PersonalInfoModal';
 
 const { width } = Dimensions.get('window');
 
@@ -36,7 +39,7 @@ interface UserProfile {
   weight: string;
   height: string;
   activityLevel: string;
-  gender: 'male' | 'female';
+  gender: 'male' | 'female' | 'other';
 }
 
 interface AppSettings {
@@ -62,6 +65,10 @@ const ACTIVITY_LEVELS = [
 ];
 
 export default function SettingsScreen() {
+  const { user, userProfile } = useUser();
+  const { updateProfile } = useUserProfile();
+  const recommendations = usePersonalizedRecommendations();
+  
   const [goals, setGoals] = useState<Goals>({ 
     calories: '', protein: '', carbs: '', fat: '', water: '' 
   });
@@ -73,14 +80,48 @@ export default function SettingsScreen() {
   });
   const [activeTab, setActiveTab] = useState<'goals' | 'profile' | 'settings'>('goals');
   const [biometricEnabled, setBiometricEnabled] = useState(false);
-  const [biometricSupported, setBiometricSupported] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [biometricSupported, setBiometricSupported] = useState(false);  const [loading, setLoading] = useState(false);
+  const [showPersonalInfo, setShowPersonalInfo] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
   const router = useRouter();
-
   useEffect(() => {
     loadAllData();
     checkBiometricSupport();
-  }, []);
+    loadFirebaseProfile();
+  }, [userProfile]);
+
+  const loadFirebaseProfile = () => {
+    if (userProfile) {
+      // Load goals from Firebase profile
+      setGoals({
+        calories: userProfile.goals?.calories?.toString() || '',
+        protein: userProfile.goals?.protein?.toString() || '',
+        carbs: userProfile.goals?.carbs?.toString() || '',
+        fat: userProfile.goals?.fat?.toString() || '',
+        water: userProfile.goals?.water?.toString() || '',
+      });
+
+      // Load profile from Firebase
+      setProfile({
+        name: userProfile.displayName || '',
+        age: userProfile.dateOfBirth 
+          ? (new Date().getFullYear() - userProfile.dateOfBirth.getFullYear()).toString()
+          : '',
+        weight: userProfile.weight?.toString() || '',
+        height: userProfile.height?.toString() || '',
+        activityLevel: userProfile.activityLevel || 'moderate',
+        gender: userProfile.gender || 'male',
+      });
+
+      // Load app settings from Firebase preferences
+      setAppSettings({
+        notifications: userProfile.preferences?.notifications?.mealReminders ?? true,
+        darkMode: false, // Will implement dark mode later
+        language: userProfile.preferences?.language || 'vi',
+        units: userProfile.preferences?.units || 'metric',
+      });
+    }
+  };
 
   const checkBiometricSupport = async () => {
     try {
@@ -147,28 +188,53 @@ export default function SettingsScreen() {
     const activityMultiplier = ACTIVITY_LEVELS.find(level => level.key === profile.activityLevel)?.multiplier || 1.55;
     return Math.round(bmr * activityMultiplier);
   };
-
-  const autoCalculateGoals = () => {
-    const tdee = calculateTDEE();
-    if (tdee > 0) {
-      const protein = Math.round(parseFloat(profile.weight) * 1.6); // 1.6g per kg
-      const fat = Math.round(tdee * 0.25 / 9); // 25% of calories from fat
-      const carbs = Math.round((tdee - protein * 4 - fat * 9) / 4); // Remaining calories from carbs
+  const autoCalculateGoals = async () => {
+    if (userProfile) {
+      const recommendedMacros = UserService.calculateRecommendedMacros(userProfile);
       
       setGoals({
-        calories: tdee.toString(),
-        protein: protein.toString(),
-        carbs: carbs.toString(),
-        fat: fat.toString(),
+        calories: recommendedMacros.calories.toString(),
+        protein: recommendedMacros.protein.toString(),
+        carbs: recommendedMacros.carbs.toString(),
+        fat: recommendedMacros.fat.toString(),
         water: '2500', // Default 2.5L water goal
       });
-      
-      Alert.alert('Thành công', 'Mục tiêu đã được tính toán tự động dựa trên thông tin cá nhân của bạn!');
+
+      // Update Firebase profile with new goals
+      try {
+        await updateProfile({
+          goals: {
+            ...userProfile.goals,
+            ...recommendedMacros,
+            water: 2500,
+          }
+        });
+        Alert.alert('Thành công', 'Mục tiêu đã được tính toán tự động và lưu vào tài khoản của bạn!');
+      } catch (error) {
+        Alert.alert('Thành công (Local)', 'Mục tiêu đã được tính toán. Đồng bộ với server có thể bị trễ.');
+      }
     } else {
-      Alert.alert('Lỗi', 'Vui lòng nhập đầy đủ thông tin cá nhân để tính toán tự động.');
+      // Fallback to old calculation if no Firebase profile
+      const tdee = calculateTDEE();
+      if (tdee > 0) {
+        const protein = Math.round(parseFloat(profile.weight) * 1.6);
+        const fat = Math.round(tdee * 0.25 / 9);
+        const carbs = Math.round((tdee - protein * 4 - fat * 9) / 4);
+        
+        setGoals({
+          calories: tdee.toString(),
+          protein: protein.toString(),
+          carbs: carbs.toString(),
+          fat: fat.toString(),
+          water: '2500',
+        });
+        
+        Alert.alert('Thành công', 'Mục tiêu đã được tính toán tự động dựa trên thông tin cá nhân của bạn!');
+      } else {
+        Alert.alert('Lỗi', 'Vui lòng nhập đầy đủ thông tin cá nhân để tính toán tự động.');
+      }
     }
   };
-
   const saveGoals = async () => {
     try {
       const parsedCalories = parseInt(goals.calories) || 0;
@@ -187,14 +253,33 @@ export default function SettingsScreen() {
         return;
       }
 
+      // Save to AsyncStorage (for backward compatibility)
       await AsyncStorage.setItem(STORAGE_KEYS.GOALS, JSON.stringify(goals));
-      Alert.alert('Thành công', 'Mục tiêu hàng ngày đã được lưu!');
+        // Save to Firebase if user is logged in
+      if (user && userProfile) {
+        const updatedProfile = {
+          ...userProfile,
+          goals: {
+            ...userProfile.goals,
+            calories: parsedCalories,
+            protein: parsedProtein,
+            carbs: parsedCarbs,
+            fat: parsedFat,
+            water: parsedWater,
+          },
+          updatedAt: new Date(),
+        };
+        
+        await updateProfile(updatedProfile);
+        Alert.alert('Thành công', 'Mục tiêu hàng ngày đã được lưu vào tài khoản!');
+      } else {
+        Alert.alert('Thành công', 'Mục tiêu hàng ngày đã được lưu!');
+      }
     } catch (error) {
       console.error('Error saving goals:', error);
       Alert.alert('Lỗi', 'Không thể lưu mục tiêu.');
     }
   };
-
   const saveProfile = async () => {
     try {
       const age = parseFloat(profile.age);
@@ -216,8 +301,27 @@ export default function SettingsScreen() {
         return;
       }
 
+      // Save to AsyncStorage (for backward compatibility)
       await AsyncStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(profile));
-      Alert.alert('Thành công', 'Thông tin cá nhân đã được lưu!');
+        // Save to Firebase if user is logged in
+      if (user && userProfile) {
+        const birthDate = profile.age ? new Date(new Date().getFullYear() - parseInt(profile.age), 0, 1) : userProfile.dateOfBirth;
+          const updatedProfile = {
+          ...userProfile,
+          displayName: profile.name || userProfile.displayName,
+          dateOfBirth: birthDate,
+          weight: weight,
+          height: height,
+          gender: profile.gender,
+          activityLevel: profile.activityLevel as 'sedentary' | 'light' | 'moderate' | 'active' | 'very-active',
+          updatedAt: new Date(),
+        };
+        
+        await updateProfile(updatedProfile);
+        Alert.alert('Thành công', 'Thông tin cá nhân đã được lưu vào tài khoản!');
+      } else {
+        Alert.alert('Thành công', 'Thông tin cá nhân đã được lưu!');
+      }
     } catch (error) {
       console.error('Error saving profile:', error);
       Alert.alert('Lỗi', 'Không thể lưu thông tin cá nhân.');
@@ -425,9 +529,35 @@ export default function SettingsScreen() {
       </View>
     </ScrollView>
   );
-
   const renderProfileTab = () => (
     <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
+      {/* User Profile Summary */}
+      {userProfile && (
+        <View style={[styles.section, { marginBottom: 16 }]}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="person-circle" size={24} color={colors.primary} />
+            <Text style={styles.sectionTitle}>Thông tin tài khoản</Text>
+          </View>
+          
+          <View style={styles.userSummary}>
+            <Text style={styles.userEmail}>{user?.email}</Text>
+            <Text style={styles.userDisplayName}>
+              {userProfile.displayName || 'Chưa cập nhật tên'}
+            </Text>
+            {userProfile.dateOfBirth && (
+              <Text style={styles.userInfo}>
+                Ngày sinh: {new Date(userProfile.dateOfBirth).toLocaleDateString('vi-VN')}
+              </Text>
+            )}
+            {userProfile.weight && userProfile.height && (
+              <Text style={styles.userInfo}>
+                {userProfile.weight}kg - {userProfile.height}cm
+              </Text>
+            )}
+          </View>
+        </View>
+      )}
+
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Ionicons name="person" size={24} color={colors.primary} />
@@ -539,13 +669,96 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             ))}
           </View>
-        </View>
-
-        <TouchableOpacity style={styles.saveButton} onPress={saveProfile}>
+        </View>        <TouchableOpacity style={styles.saveButton} onPress={saveProfile}>
           <Ionicons name="save-outline" size={20} color={colors.background} />
           <Text style={styles.saveButtonText}>Lưu thông tin</Text>
+        </TouchableOpacity>        {/* Edit Profile Button */}
+        <TouchableOpacity 
+          style={[styles.saveButton, { backgroundColor: colors.info, marginTop: 12 }]} 
+          onPress={() => {
+            console.log('Edit profile button pressed');
+            console.log('showProfileModal current state:', showProfileModal);
+            setShowProfileModal(true);
+            console.log('setShowProfileModal(true) called');
+          }}
+        >
+          <Ionicons name="person-outline" size={20} color={colors.background} />
+          <Text style={styles.saveButtonText}>Chỉnh sửa hồ sơ chi tiết</Text>
         </TouchableOpacity>
-      </View>
+        
+        {/* Debug Info */}
+        <TouchableOpacity 
+          style={[styles.saveButton, { backgroundColor: colors.warning, marginTop: 8 }]} 
+          onPress={() => {
+            Alert.alert('Debug Info', `
+User: ${user?.email || 'Not logged in'}
+Profile: ${userProfile ? 'Loaded' : 'Not loaded'}
+Modal State: ${showProfileModal ? 'Open' : 'Closed'}
+            `);
+          }}
+        >
+          <Ionicons name="bug-outline" size={20} color={colors.background} />
+          <Text style={styles.saveButtonText}>Debug Info</Text>
+        </TouchableOpacity>
+      </View>{/* Personalized Recommendations */}
+      {recommendations && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="bulb" size={24} color={colors.warning} />
+            <Text style={styles.sectionTitle}>Gợi ý cá nhân</Text>
+          </View>
+          
+          {recommendations.goalAdjustments.map((rec, index) => (
+            <View key={`goal-${index}`} style={styles.recommendationItem}>
+              <Ionicons name="arrow-forward-circle" size={16} color={colors.primary} />
+              <Text style={styles.recommendationText}>{rec}</Text>
+            </View>
+          ))}
+          
+          {recommendations.macroTips.map((rec, index) => (
+            <View key={`macro-${index}`} style={styles.recommendationItem}>
+              <Ionicons name="nutrition" size={16} color={colors.success} />
+              <Text style={styles.recommendationText}>{rec}</Text>
+            </View>
+          ))}
+          
+          {recommendations.activitySuggestions.map((rec, index) => (
+            <View key={`activity-${index}`} style={styles.recommendationItem}>
+              <Ionicons name="fitness" size={16} color={colors.warning} />
+              <Text style={styles.recommendationText}>{rec}</Text>
+            </View>
+          ))}
+        </View>
+      )}      {/* User Basic Info Display */}
+      {userProfile && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="stats-chart" size={24} color={colors.success} />
+            <Text style={styles.sectionTitle}>Thông tin cơ bản</Text>
+          </View>
+          
+          <View style={styles.statsGrid}>
+            {userProfile.weight && (
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{userProfile.weight}kg</Text>
+                <Text style={styles.statLabel}>Cân nặng</Text>
+              </View>
+            )}
+            {userProfile.height && (
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{userProfile.height}cm</Text>
+                <Text style={styles.statLabel}>Chiều cao</Text>
+              </View>
+            )}
+            {userProfile.goals?.calories && (
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{userProfile.goals.calories}</Text>
+                <Text style={styles.statLabel}>Mục tiêu calo</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      )}
     </ScrollView>
   );
 
@@ -692,13 +905,21 @@ export default function SettingsScreen() {
           ]}>
             Ứng dụng
           </Text>
-        </TouchableOpacity>
-      </View>
+        </TouchableOpacity>      </View>
 
       {/* Tab Content */}
       {activeTab === 'goals' && renderGoalsTab()}
       {activeTab === 'profile' && renderProfileTab()}
       {activeTab === 'settings' && renderSettingsTab()}
+      
+      {/* Personal Info Modal */}
+      <PersonalInfoModal
+        visible={showProfileModal}
+        onClose={() => {
+          console.log('Modal onClose called');
+          setShowProfileModal(false);
+        }}
+      />
     </View>
   );
 }
@@ -1012,11 +1233,72 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 4,
-  },
-  dangerButtonText: {
+  },  dangerButtonText: {
     color: colors.background,
     fontWeight: 'bold',
     fontSize: 16,
     marginLeft: 8,
+  },
+  userSummary: {
+    padding: 16,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 12,
+    marginTop: 12,
+  },
+  userEmail: {
+    fontSize: 16,
+    color: colors.primary,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  userDisplayName: {
+    fontSize: 18,
+    color: colors.text,
+    fontWeight: '600',
+    marginBottom: 8,
+  },  userInfo: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 4,
+  },
+  recommendationItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  recommendationText: {
+    fontSize: 14,
+    color: colors.text,
+    marginLeft: 8,
+    flex: 1,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 12,
+  },
+  statItem: {
+    flex: 1,
+    minWidth: '30%',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 8,
+    margin: 4,
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: colors.primary,
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    textAlign: 'center',
   },
 });

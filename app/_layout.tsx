@@ -4,6 +4,7 @@ import { useEffect, useState, createContext, useContext } from 'react';
 import { auth } from '@/firebaseConfig';
 import { ActivityIndicator, View, Text } from 'react-native';
 import { colors } from '@/constants/colors';
+import { UserProvider } from '@/contexts/UserContext';
 
 // Tạo Context để quản lý trạng thái xác thực
 const AuthContext = createContext<{ user: any; loading: boolean }>({ user: null, loading: true });
@@ -34,9 +35,11 @@ const useAuth = () => useContext(AuthContext);
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <RootLayoutNavigator />
-    </AuthProvider>
+    <UserProvider>
+      <AuthProvider>
+        <RootLayoutNavigator />
+      </AuthProvider>
+    </UserProvider>
   );
 }
 
