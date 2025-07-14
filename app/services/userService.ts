@@ -140,34 +140,60 @@ export class UserService {  // Create or update user profile
     }
   }
 
-  // Get user profile
-  static async getUserProfile(uid: string): Promise<UserProfile | null> {
+  // Get user profile with security validation
+  static async getUserProfile(uid: string, currentUserUid?: string): Promise<UserProfile | null> {
     try {
+      console.log('UserService - Getting profile for UID:', uid);
+      
+      // Validate access if currentUserUid is provided
+      if (currentUserUid) {
+        this.validateUserAccess(uid, currentUserUid);
+      }
+      
       const userRef = doc(db, 'users', uid);
       const userSnap = await getDoc(userRef);
       
       if (userSnap.exists()) {
         const data = userSnap.data();
-        return {
+        console.log('UserService - Raw Firestore data:', data);
+        
+        const profile = {
           ...data,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          updatedAt: data.updatedAt?.toDate() || new Date(),
-          lastActiveAt: data.lastActiveAt?.toDate() || new Date(),
-          dateOfBirth: data.dateOfBirth?.toDate(),
+          createdAt: this.safeTimestampToDateWithDefault(data.createdAt),
+          updatedAt: this.safeTimestampToDateWithDefault(data.updatedAt),
+          lastActiveAt: this.safeTimestampToDateWithDefault(data.lastActiveAt),
+          dateOfBirth: this.safeTimestampToDate(data.dateOfBirth),
         } as UserProfile;
+        
+        console.log('UserService - Processed profile:', profile);
+        return profile;
+      } else {
+        console.log('UserService - No profile found for UID:', uid);
+        return null;
       }
-      return null;
     } catch (error) {
       console.error('Error getting user profile:', error);
+      console.error('Error details:', {
+        uid,
+        currentUserUid,
+        error: error instanceof Error ? error.message : error
+      });
       throw error;
     }
   }
-  // Update user profile
-  static async updateUserProfile(uid: string, updates: Partial<UserProfile>): Promise<void> {
+
+  // Update user profile with security validation
+  static async updateUserProfile(uid: string, updates: Partial<UserProfile>, currentUserUid?: string): Promise<void> {
     try {
+      // Validate access if currentUserUid is provided
+      if (currentUserUid) {
+        this.validateUserAccess(uid, currentUserUid);
+      }
+      
       const userRef = doc(db, 'users', uid);
       const updateData = {
         ...updates,
+        uid: uid, // Ensure UID is always correct
         updatedAt: new Date(),
       };
       
@@ -175,7 +201,7 @@ export class UserService {  // Create or update user profile
       const cleanedData = this.cleanUndefinedValues(updateData);
       
       await updateDoc(userRef, cleanedData);
-      console.log('User profile updated successfully');
+      console.log('User profile updated successfully for UID:', uid);
     } catch (error) {
       console.error('Error updating user profile:', error);
       throw error;
@@ -385,20 +411,54 @@ export class UserService {  // Create or update user profile
     return recommendations;
   }
 
-  // Utility function to remove undefined values from object
+  // Validate that the user can only access their own data
+  private static validateUserAccess(requestedUid: string, currentUserUid: string): void {
+    if (requestedUid !== currentUserUid) {
+      throw new Error('Access denied: You can only access your own data');
+    }
+  }
+
+  // Clean undefined values to prevent Firestore errors
   private static cleanUndefinedValues(obj: any): any {
-    const cleaned: any = {};
-    
-    for (const [key, value] of Object.entries(obj)) {
-      if (value !== undefined) {
-        if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
-          cleaned[key] = this.cleanUndefinedValues(value);
-        } else {
-          cleaned[key] = value;
-        }
-      }
+    if (obj === null || obj === undefined) {
+      return null;
     }
     
-    return cleaned;
+    if (Array.isArray(obj)) {
+      return obj.map(item => this.cleanUndefinedValues(item)).filter(item => item !== undefined);
+    }
+    
+    if (typeof obj === 'object') {
+      const cleaned: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (value !== undefined) {
+          cleaned[key] = this.cleanUndefinedValues(value);
+        }
+      }
+      return cleaned;
+    }
+    
+    return obj;
+  }
+
+  // Helper function to safely convert Firestore timestamp to Date
+  private static safeTimestampToDate(timestamp: any): Date | undefined {
+    if (!timestamp) return undefined;
+    if (typeof timestamp.toDate === 'function') {
+      return timestamp.toDate();
+    }
+    if (timestamp instanceof Date) {
+      return timestamp;
+    }
+    if (typeof timestamp === 'string') {
+      return new Date(timestamp);
+    }
+    return undefined;
+  }
+
+  // Helper function to safely convert Firestore timestamp to Date with default
+  private static safeTimestampToDateWithDefault(timestamp: any, defaultDate: Date = new Date()): Date {
+    const result = this.safeTimestampToDate(timestamp);
+    return result || defaultDate;
   }
 }

@@ -47,7 +47,16 @@ export default function TabsLayout() {
           ),
         }}
       />
-       <Tabs.Screen
+      <Tabs.Screen
+        name="activity"
+        options={{
+          title: "Hoạt động",
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
+            <Ionicons name="fitness" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="settings"
         options={{
           title: "Cài đặt",

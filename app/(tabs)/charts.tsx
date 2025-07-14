@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,8 +12,11 @@ import { LineChart, BarChart, PieChart, ProgressChart } from 'react-native-chart
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '@/constants/colors';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useUser, useUserProfile } from '@/contexts/UserContext';
+// import { useMealUpdate } from '@/contexts/MealContext';
 import { UserService } from '@/services/userService';
 
 interface Meal {
@@ -25,6 +28,16 @@ interface Meal {
   fat: number;
   date: string;
   category?: string;
+}
+
+interface Exercise {
+  id: string;
+  name: string;
+  duration: number;
+  caloriesBurned: number;
+  date: string;
+  type: string;
+  notes?: string;
 }
 
 interface DailyGoals {
@@ -87,7 +100,20 @@ const getWeekDates = () => {
 export default function ChartsScreen() {
   const { user } = useUser();
   const { userProfile } = useUserProfile();
+  const { colors } = useTheme();
+  // const { mealVersion } = useMealUpdate();
   const router = useRouter();
+
+  // Helper functions để tạo storage keys riêng biệt cho từng user
+  const getMealsStorageKey = () => {
+    if (!user?.uid) return 'meals'; // fallback for safety
+    return `meals_${user.uid}`;
+  };
+
+  const getGoalsStorageKey = () => {
+    if (!user?.uid) return 'dailyGoals'; // fallback for safety
+    return `dailyGoals_${user.uid}`;
+  };
   
   const [meals, setMeals] = useState<Meal[]>([]);
   const [dailyGoals, setDailyGoals] = useState<DailyGoals>({
@@ -96,10 +122,11 @@ export default function ChartsScreen() {
     carbs: 250,
     fat: 65
   });
-  const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month'>('week');
+  // Removed selectedPeriod - always show 7 days
   const [dailyData, setDailyData] = useState<DailyData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exercises, setExercises] = useState<Exercise[]>([]);
 
   // Debug effect
   useEffect(() => {
@@ -109,15 +136,27 @@ export default function ChartsScreen() {
     console.log('ChartsScreen - meals count:', meals.length);
     console.log('ChartsScreen - dailyData count:', dailyData.length);
     console.log('ChartsScreen - loading:', loading);
-  }, [user, userProfile, meals, dailyData, loading, error]);  useEffect(() => {
-    console.log('ChartsScreen - loadData called');
-    loadData();
-  }, []);
+    console.log('ChartsScreen - getMealsStorageKey:', getMealsStorageKey());
+  }, [user, userProfile, meals, dailyData, loading, error]);
+
+  // Auto-refresh data every time user focuses on this tab
+  useFocusEffect(
+    useCallback(() => {
+      console.log('ChartsScreen - Tab focused, refreshing data');
+      if (user?.uid) {
+        loadData();
+      } else {
+        console.log('ChartsScreen - No user found, skipping load');
+        setMeals([]);
+        setLoading(false);
+      }
+    }, [user?.uid])
+  );
 
   useEffect(() => {
     console.log('ChartsScreen - processDailyData called, meals:', meals.length);
     processDailyData();
-  }, [meals, selectedPeriod]);
+  }, [meals]); // Removed selectedPeriod dependency
 
   // Load goals from Firebase when userProfile changes
   useEffect(() => {
@@ -131,14 +170,35 @@ export default function ChartsScreen() {
       });
     }
   }, [userProfile]);
+
+  // Listen for meal updates from other tabs
+  // useEffect(() => {
+  //   if (user?.uid && mealVersion > 0) {
+  //     console.log('ChartsScreen - Meal update detected, version:', mealVersion);
+  //     loadData();
+  //   }
+  // }, [mealVersion, user?.uid]);
+
   const loadData = async () => {
     try {
       console.log('ChartsScreen - Loading data...');
       setLoading(true);
       setError(null);
+
+      if (!user?.uid) {
+        console.log('ChartsScreen - No user UID, cannot load data');
+        setMeals([]);
+        setLoading(false);
+        return;
+      }
+
+      const mealsKey = getMealsStorageKey();
+      const goalsKey = getGoalsStorageKey();
       
-      // Load meals
-      const storedMeals = await AsyncStorage.getItem('meals');
+      console.log('ChartsScreen - Loading meals with key:', mealsKey);
+      
+      // Load meals (user-specific)
+      const storedMeals = await AsyncStorage.getItem(mealsKey);
       console.log('ChartsScreen - storedMeals:', storedMeals ? 'Found' : 'Not found');
       
       if (storedMeals) {
@@ -154,10 +214,13 @@ export default function ChartsScreen() {
           console.log('ChartsScreen - Valid meals loaded:', validMeals.length);
           setMeals(validMeals);
         }
+      } else {
+        console.log('ChartsScreen - No meals found for user');
+        setMeals([]);
       }
 
-      // Load goals
-      const storedGoals = await AsyncStorage.getItem('dailyGoals');
+      // Load goals (user-specific)
+      const storedGoals = await AsyncStorage.getItem(goalsKey);
       console.log('ChartsScreen - storedGoals:', storedGoals ? 'Found' : 'Not found');
       
       if (storedGoals) {
@@ -180,9 +243,41 @@ export default function ChartsScreen() {
     }
   };
 
+  // Helper để lấy storage key cho exercises
+  const getExercisesStorageKey = () => {
+    if (!user?.uid) return 'exercises';
+    return `exercises_${user.uid}`;
+  };
+
+  // Load exercises từ AsyncStorage
+  const loadExercises = async () => {
+    try {
+      if (!user?.uid) {
+        setExercises([]);
+        return;
+      }
+      const storageKey = getExercisesStorageKey();
+      const stored = await AsyncStorage.getItem(storageKey);
+      if (stored) {
+        setExercises(JSON.parse(stored));
+      } else {
+        setExercises([]);
+      }
+    } catch (error) {
+      setExercises([]);
+    }
+  };
+
+  // Auto-refresh exercises khi focus tab
+  useFocusEffect(
+    useCallback(() => {
+      loadExercises();
+    }, [user?.uid])
+  );
+
   const processDailyData = () => {
     const today = new Date();
-    const daysToShow = selectedPeriod === 'week' ? 7 : 30;
+    const daysToShow = 7; // Always show 7 days
     const dailyTotals: { [key: string]: DailyData } = {};
 
     // Initialize data for the last N days
@@ -207,6 +302,13 @@ export default function ChartsScreen() {
         dailyTotals[meal.date].protein += safeNumber(meal.protein);
         dailyTotals[meal.date].carbs += safeNumber(meal.carbs);
         dailyTotals[meal.date].fat += safeNumber(meal.fat);
+      }
+    });
+
+    // Aggregate exercise data by date
+    exercises.forEach(exercise => {
+      if (dailyTotals[exercise.date]) {
+        dailyTotals[exercise.date].calories += safeNumber(exercise.caloriesBurned);
       }
     });
 
@@ -310,24 +412,50 @@ export default function ChartsScreen() {
     };
   };
 
+  const getCalorieBurnData = () => {
+    if (!userProfile) return null;
+    const bmr = UserService.calculateBMR(userProfile);
+    const tdee = UserService.calculateTDEE(userProfile);
+    const activityCalories = tdee - bmr;
+    // Tính tổng caloriesBurned hôm nay từ exercises
+    const today = new Date().toDateString();
+    const todayExercises = exercises.filter(ex => ex.date === today);
+    const exerciseCalories = todayExercises.reduce((sum, ex) => sum + (ex.caloriesBurned || 0), 0);
+    return {
+      bmr: Math.round(bmr),
+      tdee: Math.round(tdee),
+      activityCalories: Math.round(activityCalories),
+      exerciseCalories: Math.round(exerciseCalories),
+    };
+  };
+
+  const getCalorieBalance = () => {
+    const today = new Date().toDateString();
+    const todayMeals = meals.filter(meal => meal.date === today);
+    const totalCalories = todayMeals.reduce((sum, meal) => sum + (meal.calories || 0), 0);
+    // Tổng caloriesBurned từ exercises
+    const todayExercises = exercises.filter(ex => ex.date === today);
+    const exerciseCalories = todayExercises.reduce((sum, ex) => sum + (ex.caloriesBurned || 0), 0);
+    // Tổng tiêu hao: BMR + exerciseCalories
+    const bmr = userProfile ? UserService.calculateBMR(userProfile) : 0;
+    const burned = Math.round(bmr + exerciseCalories);
+    const balance = totalCalories - burned;
+    return {
+      balance,
+      consumed: totalCalories,
+      burned,
+      isDeficit: balance < 0,
+      isSurplus: balance > 0,
+    };
+  };
+
   const renderPeriodSelector = () => (
     <View style={styles.periodSelector}>
-      <TouchableOpacity
-        style={[styles.periodButton, selectedPeriod === 'week' && styles.activePeriodButton]}
-        onPress={() => setSelectedPeriod('week')}
-      >
-        <Text style={[styles.periodText, selectedPeriod === 'week' && styles.activePeriodText]}>
-          7 ngày
+      <View style={[styles.periodButton, styles.activePeriodButton]}>
+        <Text style={[styles.periodText, styles.activePeriodText]}>
+          7 ngày qua
         </Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.periodButton, selectedPeriod === 'month' && styles.activePeriodButton]}
-        onPress={() => setSelectedPeriod('month')}
-      >
-        <Text style={[styles.periodText, selectedPeriod === 'month' && styles.activePeriodText]}>
-          30 ngày
-        </Text>
-      </TouchableOpacity>
+      </View>
     </View>
   );
 
@@ -335,6 +463,8 @@ export default function ChartsScreen() {
   const macroDistribution = getMacroDistribution();
   const caloriesLineData = getCaloriesLineData();
   const proteinBarData = getProteinBarData();
+  const calorieBurnData = getCalorieBurnData();
+  const calorieBalance = getCalorieBalance();
     const weeklyCalories = dailyData.slice(-7).reduce((sum, day) => sum + safeNumber(day.calories), 0);
   const avgCalories = Math.round(weeklyCalories / 7);
   const weeklyProtein = dailyData.slice(-7).reduce((sum, day) => sum + safeNumber(day.protein), 0);
@@ -486,6 +616,126 @@ Goals from Profile: ${userProfile?.goals ? 'Yes' : 'No'}
 
       {/* Period Selector */}
       {renderPeriodSelector()}
+
+      {/* Calorie Burn & Balance */}
+      {calorieBurnData && calorieBalance && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="flame" size={24} color={colors.calories} />
+            <Text style={styles.sectionTitle}>Tiêu hao & Cân bằng calo</Text>
+          </View>
+          
+          <View style={styles.calorieBurnContainer}>
+            {/* Calorie Balance Overview */}
+            <View style={styles.calorieBalanceCard}>
+              <View style={styles.balanceHeader}>
+                <Text style={styles.balanceTitle}>Cân bằng calo hôm nay</Text>
+                <View style={[
+                  styles.balanceIndicator,
+                  {
+                    backgroundColor: calorieBalance.isDeficit ? colors.success + '20' : 
+                                   calorieBalance.isSurplus ? colors.warning + '20' : colors.info + '20'
+                  }
+                ]}>
+                  <Ionicons 
+                    name={calorieBalance.isDeficit ? "trending-down" : 
+                          calorieBalance.isSurplus ? "trending-up" : "remove"} 
+                    size={16} 
+                    color={calorieBalance.isDeficit ? colors.success : 
+                           calorieBalance.isSurplus ? colors.warning : colors.info} 
+                  />
+                  <Text style={[
+                    styles.balanceValue,
+                    {
+                      color: calorieBalance.isDeficit ? colors.success : 
+                             calorieBalance.isSurplus ? colors.warning : colors.info
+                    }
+                  ]}>
+                    {calorieBalance.balance > 0 ? '+' : ''}{calorieBalance.balance} kcal
+                  </Text>
+                </View>
+              </View>
+              
+              <View style={styles.balanceDetails}>
+                <View style={styles.balanceItem}>
+                  <Ionicons name="restaurant" size={16} color={colors.primary} />
+                  <Text style={styles.balanceLabel}>Tiêu thụ:</Text>
+                  <Text style={styles.balanceNumber}>{calorieBalance.consumed} kcal</Text>
+                </View>
+                <View style={styles.balanceItem}>
+                  <Ionicons name="flame" size={16} color={colors.calories} />
+                  <Text style={styles.balanceLabel}>Tiêu hao:</Text>
+                  <Text style={styles.balanceNumber}>{calorieBalance.burned} kcal</Text>
+                </View>
+              </View>
+              
+              {calorieBalance.isDeficit && (
+                <Text style={styles.balanceNote}>
+                  🎯 Bạn đang thiếu hụt calo - tốt cho giảm cân
+                </Text>
+              )}
+              {calorieBalance.isSurplus && (
+                <Text style={styles.balanceNote}>
+                  ⚠️ Bạn đang thừa calo - có thể tăng cân
+                </Text>
+              )}
+            </View>
+
+            {/* Calorie Burn Breakdown */}
+            <View style={styles.burnBreakdownGrid}>
+              <View style={styles.burnCard}>
+                <View style={styles.burnCardHeader}>
+                  <Ionicons name="heart" size={20} color={colors.error} />
+                  <Text style={styles.burnCardTitle}>BMR</Text>
+                </View>
+                <Text style={styles.burnCardValue}>{calorieBurnData.bmr}</Text>
+                <Text style={styles.burnCardLabel}>kcal/ngày</Text>
+                <Text style={styles.burnCardDesc}>Trao đổi chất cơ bản</Text>
+              </View>
+              
+              <View style={styles.burnCard}>
+                <View style={styles.burnCardHeader}>
+                  <Ionicons name="walk" size={20} color={colors.info} />
+                  <Text style={styles.burnCardTitle}>Hoạt động</Text>
+                </View>
+                <Text style={styles.burnCardValue}>{calorieBurnData.activityCalories}</Text>
+                <Text style={styles.burnCardLabel}>kcal/ngày</Text>
+                <Text style={styles.burnCardDesc}>Sinh hoạt hàng ngày</Text>
+              </View>
+              
+              <View style={styles.burnCard}>
+                <View style={styles.burnCardHeader}>
+                  <Ionicons name="fitness" size={20} color={colors.success} />
+                  <Text style={styles.burnCardTitle}>Tổng TDEE</Text>
+                </View>
+                <Text style={styles.burnCardValue}>{calorieBurnData.tdee}</Text>
+                <Text style={styles.burnCardLabel}>kcal/ngày</Text>
+                <Text style={styles.burnCardDesc}>Tổng tiêu hao</Text>
+              </View>
+            </View>
+
+            {/* Tips based on calorie balance */}
+            <View style={styles.calorieAdviceContainer}>
+              <Text style={styles.adviceTitle}>💡 Gợi ý:</Text>
+              {calorieBalance.isDeficit && Math.abs(calorieBalance.balance) > 500 && (
+                <Text style={styles.adviceText}>
+                  Thiếu hụt calo quá lớn có thể làm chậm trao đổi chất. Hãy ăn thêm một chút.
+                </Text>
+              )}
+              {calorieBalance.isSurplus && calorieBalance.balance > 300 && (
+                <Text style={styles.adviceText}>
+                  Thừa calo có thể dẫn đến tăng cân. Hãy giảm khẩu phần hoặc tăng vận động.
+                </Text>
+              )}
+              {Math.abs(calorieBalance.balance) <= 100 && (
+                <Text style={styles.adviceText}>
+                  Cân bằng calo tốt! Bạn đang duy trì cân nặng hiệu quả.
+                </Text>
+              )}
+            </View>
+          </View>
+        </View>
+      )}
 
       {/* Today's Progress */}
       <View style={styles.section}>
@@ -960,5 +1210,125 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     flex: 1,
     lineHeight: 18,
+  },
+  // Calorie burn styles
+  calorieBurnContainer: {
+    marginTop: 8,
+  },
+  calorieBalanceCard: {
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  balanceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  balanceTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: colors.text,
+  },
+  balanceIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  balanceValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginLeft: 4,
+  },
+  balanceDetails: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  balanceItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  balanceLabel: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginLeft: 8,
+    marginRight: 4,
+  },
+  balanceNumber: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: colors.text,
+  },
+  balanceNote: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  burnBreakdownGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  burnCard: {
+    flex: 1,
+    backgroundColor: colors.background,
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 4,
+    alignItems: 'center',
+  },
+  burnCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  burnCardTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: colors.text,
+    marginLeft: 4,
+  },
+  burnCardValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.primary,
+    marginBottom: 2,
+  },
+  burnCardLabel: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    marginBottom: 4,
+  },
+  burnCardDesc: {
+    fontSize: 10,
+    color: colors.textLight,
+    textAlign: 'center',
+    lineHeight: 12,
+  },
+  calorieAdviceContainer: {
+    backgroundColor: colors.info + '10',
+    borderRadius: 8,
+    padding: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.info,
+  },
+  adviceTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: colors.text,
+    marginBottom: 4,
+  },
+  adviceText: {
+    fontSize: 13,
+    color: colors.text,
+    lineHeight: 16,
   },
 });

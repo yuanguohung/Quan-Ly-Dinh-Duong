@@ -27,10 +27,12 @@ export function UserProvider({ children }: UserProviderProps) {
   const loadUserProfile = async (currentUser: User | null) => {
     if (currentUser) {
       try {
+        console.log('UserContext - Loading profile for user:', currentUser.uid);
         let profile = await UserService.getUserProfile(currentUser.uid);
         
         // If profile doesn't exist, create it
         if (!profile) {
+          console.log('UserContext - Profile not found, creating new profile');
           await UserService.createUserProfile(currentUser);
           profile = await UserService.getUserProfile(currentUser.uid);
         }
@@ -38,22 +40,32 @@ export function UserProvider({ children }: UserProviderProps) {
         // Update last active
         await UserService.updateLastActive(currentUser.uid);
         
+        console.log('UserContext - Profile loaded successfully:', profile);
         setUserProfile(profile);
       } catch (error) {
-        console.error('Error loading user profile:', error);
+        console.error('UserContext - Error loading user profile:', error);
+        console.error('UserContext - Error details:', {
+          uid: currentUser.uid,
+          email: currentUser.email,
+          error: error instanceof Error ? error.message : error
+        });
+        // Set null profile on error to prevent infinite loops
+        setUserProfile(null);
       }
     } else {
+      console.log('UserContext - No current user, setting profile to null');
       setUserProfile(null);
     }
     setLoading(false);
   };
 
-  // Update user profile
+  // Update user profile with security validation
   const updateProfile = async (updates: Partial<UserProfile>) => {
     if (!user) throw new Error('No authenticated user');
     
     try {
-      await UserService.updateUserProfile(user.uid, updates);
+      console.log('UserContext - Updating profile for user:', user.uid);
+      await UserService.updateUserProfile(user.uid, updates, user.uid);
       // Refresh profile data
       await refreshProfile();
     } catch (error) {
@@ -62,10 +74,11 @@ export function UserProvider({ children }: UserProviderProps) {
     }
   };
 
-  // Refresh profile data
+  // Refresh profile data with security validation
   const refreshProfile = async () => {
     if (user) {
-      const profile = await UserService.getUserProfile(user.uid);
+      console.log('UserContext - Refreshing profile for user:', user.uid);
+      const profile = await UserService.getUserProfile(user.uid, user.uid);
       setUserProfile(profile);
     }
   };

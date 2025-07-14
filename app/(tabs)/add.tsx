@@ -17,6 +17,9 @@ import { Ionicons } from '@expo/vector-icons';
 import FoodDatabase from '../components/FoodDatabase';
 import { FoodItem } from '../data/vietnameseFoods';
 import { colors } from '@/constants/colors';
+import { useTheme } from '@/contexts/ThemeContext';
+import { useUser } from '@/contexts/UserContext';
+// import { useMealUpdate } from '@/contexts/MealContext';
 
 interface Meal {
   id: string;
@@ -37,30 +40,69 @@ const MEAL_CATEGORIES = [
 ];
 
 export default function AddMealScreen() {
+  const { user } = useUser();
+  const { colors } = useTheme();
+  // const { triggerMealUpdate } = useMealUpdate();
   const [name, setName] = useState('');
   const [calories, setCalories] = useState('');
   const [protein, setProtein] = useState('');
   const [carbs, setCarbs] = useState('');
-  const [fat, setFat] = useState('');  const [selectedCategory, setSelectedCategory] = useState(MEAL_CATEGORIES[0]);
+  const [fat, setFat] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState(MEAL_CATEGORIES[0]);
   const [meals, setMeals] = useState<Meal[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showFoodDatabase, setShowFoodDatabase] = useState(false);
   const router = useRouter();
 
+  // Helper function to get user-specific storage keys
+  const getUserStorageKey = (baseKey: string): string => {
+    if (!user?.uid) {
+      console.warn('No user UID available, using default key');
+      return baseKey; // Fallback for users not logged in
+    }
+    return `${baseKey}_${user.uid}`;
+  };
+
+  // Helper function to get meals storage key for current user
+  const getMealsStorageKey = (): string => {
+    return getUserStorageKey('meals');
+  };
+
   // Load lịch sử món ăn
   useEffect(() => {
     const loadMeals = async () => {
       try {
-        const stored = await AsyncStorage.getItem('meals');
-        if (stored) setMeals(JSON.parse(stored));
+        console.log('Loading meals for user:', user?.uid || 'anonymous');
+        const mealsKey = getMealsStorageKey();
+        console.log('Using storage key:', mealsKey);
+        const stored = await AsyncStorage.getItem(mealsKey);
+        if (stored) {
+          const parsedMeals = JSON.parse(stored);
+          console.log('Loaded meals:', parsedMeals.length);
+          setMeals(parsedMeals);
+        } else {
+          console.log('No meals found for this user');
+          setMeals([]);
+        }
       } catch (error) {
         console.error('Lỗi khi tải dữ liệu:', error);
+        setMeals([]);
       }
     };
-    loadMeals();
-  }, []);
+    
+    if (user) {
+      loadMeals();
+    } else {
+      setMeals([]); // Clear meals if no user
+    }
+  }, [user?.uid]); // Re-run when user changes
 
   const saveMeal = async () => {
+    if (!user) {
+      Alert.alert('Lỗi', 'Bạn cần đăng nhập để thêm món ăn');
+      return;
+    }
+
     if (!name.trim() || !calories.trim() || !protein.trim() || !carbs.trim() || !fat.trim()) {
       Alert.alert('Lỗi', 'Vui lòng nhập đầy đủ thông tin');
       return;
@@ -76,7 +118,9 @@ export default function AddMealScreen() {
       return;
     }
 
-    setIsSubmitting(true);    const newMeal: Meal = {
+    setIsSubmitting(true);
+
+    const newMeal: Meal = {
       id: Date.now().toString(),
       name: name.trim(),
       calories: caloriesNumber,
@@ -88,9 +132,16 @@ export default function AddMealScreen() {
     };
 
     try {
+      const mealsKey = getMealsStorageKey();
       const updatedMeals = [...meals, newMeal];
-      await AsyncStorage.setItem('meals', JSON.stringify(updatedMeals));
+      console.log('Saving meal for user:', user.uid);
+      console.log('Using storage key:', mealsKey);
+      console.log('New meal:', newMeal);
+      await AsyncStorage.setItem(mealsKey, JSON.stringify(updatedMeals));
       setMeals(updatedMeals);
+      
+      // Trigger meal update to notify other tabs
+      // triggerMealUpdate();
       
       setName('');
       setCalories('');
@@ -117,9 +168,15 @@ export default function AddMealScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              const mealsKey = getMealsStorageKey();
               const updatedMeals = meals.filter(meal => meal.id !== id);
-              await AsyncStorage.setItem('meals', JSON.stringify(updatedMeals));
+              console.log('Deleting meal for user:', user?.uid);
+              console.log('Using storage key:', mealsKey);
+              await AsyncStorage.setItem(mealsKey, JSON.stringify(updatedMeals));
               setMeals(updatedMeals);
+              
+              // Trigger meal update to notify other tabs
+              // triggerMealUpdate();
             } catch (error) {
               console.error('Lỗi khi xóa:', error);
             }

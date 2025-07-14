@@ -1,14 +1,17 @@
 // app/(tabs)/index.tsx
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, Modal, TextInput, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useIsFocused } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '@/constants/colors';
+import { useTheme } from '@/contexts/ThemeContext';
 import NutritionCard from '@/components/NutritionCard';
 import ProgressBar, { ProgressRing } from '@/components/ProgressRing';
+import { useUser, useUserProfile } from '@/contexts/UserContext';
+// import { useMealUpdate } from '@/contexts/MealContext';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -38,9 +41,43 @@ interface WaterEntry {
   time: string;
 }
 
+interface Exercise {
+  id: string;
+  name: string;
+  duration: number;
+  caloriesBurned: number;
+  date: string;
+  type: string;
+  notes?: string;
+}
+
 export default function HomeScreen() {
   const router = useRouter();
-  const isFocused = useIsFocused();
+  const { user } = useUser();
+  const { userProfile } = useUserProfile();
+  const { colors } = useTheme();
+  // const { mealVersion, triggerMealUpdate } = useMealUpdate();
+
+  // Helper functions để tạo storage keys riêng biệt cho từng user
+  const getMealsStorageKey = () => {
+    if (!user?.uid) return 'meals'; // fallback for safety
+    return `meals_${user.uid}`;
+  };
+
+  const getGoalsStorageKey = () => {
+    if (!user?.uid) return 'dailyGoals'; // fallback for safety
+    return `dailyGoals_${user.uid}`;
+  };
+
+  const getWaterStorageKey = () => {
+    if (!user?.uid) return 'waterEntries'; // fallback for safety
+    return `waterEntries_${user.uid}`;
+  };
+
+  const getExercisesStorageKey = () => {
+    if (!user?.uid) return 'exercises'; // fallback for safety
+    return `exercises_${user.uid}`;
+  };
   
   const [totalCalories, setTotalCalories] = useState(0);
   const [totalProtein, setTotalProtein] = useState(0);
@@ -49,6 +86,9 @@ export default function HomeScreen() {
   const [todayMeals, setTodayMeals] = useState<Meal[]>([]);
   const [totalWater, setTotalWater] = useState(0); // in ml
   const [todayWaterEntries, setTodayWaterEntries] = useState<WaterEntry[]>([]);
+  const [exercises, setExercises] = useState<Exercise[]>([]);
+  const [todayExercises, setTodayExercises] = useState<Exercise[]>([]);
+  const [totalCaloriesBurned, setTotalCaloriesBurned] = useState(0);
   const [isWaterModalVisible, setIsWaterModalVisible] = useState(false);
   const [customWaterAmount, setCustomWaterAmount] = useState('');
   const [dailyGoals, setDailyGoals] = useState<DailyGoals>({
@@ -70,7 +110,20 @@ export default function HomeScreen() {
   };
   const fetchMeals = async () => {
     try {
-      const saved = await AsyncStorage.getItem('meals');
+      if (!user?.uid) {
+        console.log('HomeScreen - No user UID, cannot fetch meals');
+        setTodayMeals([]);
+        setTotalCalories(0);
+        setTotalProtein(0);
+        setTotalCarbs(0);
+        setTotalFat(0);
+        return;
+      }
+
+      const mealsKey = getMealsStorageKey();
+      const saved = await AsyncStorage.getItem(mealsKey);
+      console.log('HomeScreen - Loading meals with key:', mealsKey);
+      
       const meals: Meal[] = saved ? JSON.parse(saved) : [];
       const today = new Date().toDateString();
 
@@ -82,6 +135,8 @@ export default function HomeScreen() {
       setTotalProtein(protein);
       setTotalCarbs(carbs);
       setTotalFat(fat);
+
+      console.log('HomeScreen - Today meals loaded:', todayItems.length);
     } catch (error) {
       console.error('Lỗi khi đọc dữ liệu:', error);
       setTotalCalories(0);
@@ -92,7 +147,30 @@ export default function HomeScreen() {
   };
   const loadGoals = async () => {
     try {
-      const storedGoals = await AsyncStorage.getItem('dailyGoals');
+      if (!user?.uid) {
+        console.log('HomeScreen - No user UID, using default goals');
+        return;
+      }
+
+      // First, try to load from userProfile (Firebase)
+      if (userProfile?.goals) {
+        console.log('HomeScreen - Loading goals from userProfile');
+        setDailyGoals({
+          calories: userProfile.goals.calories || 2000,
+          protein: userProfile.goals.protein || 150,
+          carbs: userProfile.goals.carbs || 250,
+          fat: userProfile.goals.fat || 65,
+          water: userProfile.goals.water || 2000,
+        });
+        console.log('HomeScreen - Goals loaded from userProfile:', userProfile.goals);
+        return;
+      }
+
+      // Fallback to AsyncStorage for backward compatibility
+      const goalsKey = getGoalsStorageKey();
+      const storedGoals = await AsyncStorage.getItem(goalsKey);
+      console.log('HomeScreen - Loading goals from AsyncStorage with key:', goalsKey);
+      
       if (storedGoals) {
         const goals = JSON.parse(storedGoals);
         setDailyGoals({
@@ -102,6 +180,9 @@ export default function HomeScreen() {
           fat: parseInt(goals.fat) || 65,
           water: parseInt(goals.water) || 2000,
         });
+        console.log('HomeScreen - Goals loaded from AsyncStorage:', goals);
+      } else {
+        console.log('HomeScreen - No goals found, using defaults');
       }
     } catch (error) {
       console.error('Error loading goals:', error);
@@ -109,11 +190,23 @@ export default function HomeScreen() {
   };
   const deleteMeal = async (id: string) => {
     try {
-      const saved = await AsyncStorage.getItem('meals');
+      if (!user?.uid) {
+        console.log('HomeScreen - No user UID, cannot delete meal');
+        Alert.alert('Lỗi', 'Bạn cần đăng nhập để xóa món ăn');
+        return;
+      }
+
+      const mealsKey = getMealsStorageKey();
+      const saved = await AsyncStorage.getItem(mealsKey);
       const meals: Meal[] = saved ? JSON.parse(saved) : [];
       const updatedMeals = meals.filter(meal => meal.id !== id);
 
-      await AsyncStorage.setItem('meals', JSON.stringify(updatedMeals));
+      await AsyncStorage.setItem(mealsKey, JSON.stringify(updatedMeals));
+      console.log('HomeScreen - Meal deleted, key:', mealsKey);
+      
+      // Trigger meal update to notify other tabs
+      // triggerMealUpdate();
+      
       fetchMeals(); // Refresh data
     } catch (error) {
       console.error('Lỗi khi xóa:', error);
@@ -122,7 +215,17 @@ export default function HomeScreen() {
 
   const fetchWaterIntake = async () => {
     try {
-      const saved = await AsyncStorage.getItem('waterEntries');
+      if (!user?.uid) {
+        console.log('HomeScreen - No user UID, cannot fetch water intake');
+        setTotalWater(0);
+        setTodayWaterEntries([]);
+        return;
+      }
+
+      const waterKey = getWaterStorageKey();
+      const saved = await AsyncStorage.getItem(waterKey);
+      console.log('HomeScreen - Loading water entries with key:', waterKey);
+      
       const entries: WaterEntry[] = saved ? JSON.parse(saved) : [];
       const today = new Date().toDateString();
 
@@ -131,6 +234,8 @@ export default function HomeScreen() {
       
       const total = todayEntries.reduce((sum, entry) => sum + entry.amount, 0);
       setTotalWater(total);
+
+      console.log('HomeScreen - Water entries loaded:', todayEntries.length);
     } catch (error) {
       console.error('Lỗi khi đọc dữ liệu nước:', error);
       setTotalWater(0);
@@ -140,7 +245,14 @@ export default function HomeScreen() {
 
   const addWater = async (amount: number) => {
     try {
-      const saved = await AsyncStorage.getItem('waterEntries');
+      if (!user?.uid) {
+        console.log('HomeScreen - No user UID, cannot add water');
+        Alert.alert('Lỗi', 'Bạn cần đăng nhập để thêm lượng nước');
+        return;
+      }
+
+      const waterKey = getWaterStorageKey();
+      const saved = await AsyncStorage.getItem(waterKey);
       const entries: WaterEntry[] = saved ? JSON.parse(saved) : [];
       
       const newEntry: WaterEntry = {
@@ -154,7 +266,8 @@ export default function HomeScreen() {
       };
 
       const updatedEntries = [...entries, newEntry];
-      await AsyncStorage.setItem('waterEntries', JSON.stringify(updatedEntries));
+      await AsyncStorage.setItem(waterKey, JSON.stringify(updatedEntries));
+      console.log('HomeScreen - Water entry added, key:', waterKey);
       fetchWaterIntake();
     } catch (error) {
       console.error('Lỗi khi thêm nước:', error);
@@ -163,24 +276,116 @@ export default function HomeScreen() {
 
   const deleteWaterEntry = async (id: string) => {
     try {
-      const saved = await AsyncStorage.getItem('waterEntries');
+      if (!user?.uid) {
+        console.log('HomeScreen - No user UID, cannot delete water entry');
+        Alert.alert('Lỗi', 'Bạn cần đăng nhập để xóa lượng nước');
+        return;
+      }
+
+      const waterKey = getWaterStorageKey();
+      const saved = await AsyncStorage.getItem(waterKey);
       const entries: WaterEntry[] = saved ? JSON.parse(saved) : [];
       const updatedEntries = entries.filter(entry => entry.id !== id);
 
-      await AsyncStorage.setItem('waterEntries', JSON.stringify(updatedEntries));
+      await AsyncStorage.setItem(waterKey, JSON.stringify(updatedEntries));
+      console.log('HomeScreen - Water entry deleted, key:', waterKey);
       fetchWaterIntake();
     } catch (error) {
       console.error('Lỗi khi xóa nước:', error);
     }
-  };  useEffect(() => {
-    if (isFocused) {
-      loadGoals();
-      fetchMeals();
-      fetchWaterIntake();
+  };
+
+  const fetchExercises = async () => {
+    try {
+      if (!user?.uid) {
+        console.log('HomeScreen - No user UID, cannot fetch exercises');
+        setExercises([]);
+        setTodayExercises([]);
+        setTotalCaloriesBurned(0);
+        return;
+      }
+
+      const exercisesKey = getExercisesStorageKey();
+      const saved = await AsyncStorage.getItem(exercisesKey);
+      console.log('HomeScreen - Loading exercises with key:', exercisesKey);
+      
+      const allExercises: Exercise[] = saved ? JSON.parse(saved) : [];
+      const today = new Date().toDateString();
+
+      const todayItems = allExercises.filter(exercise => exercise.date === today);
+      setExercises(allExercises);
+      setTodayExercises(todayItems);
+
+      const totalBurned = todayItems.reduce((sum, exercise) => sum + (exercise.caloriesBurned || 0), 0);
+      setTotalCaloriesBurned(totalBurned);
+
+      console.log('HomeScreen - Today exercises loaded:', todayItems.length);
+      console.log('HomeScreen - Total calories burned:', totalBurned);
+    } catch (error) {
+      console.error('Lỗi khi đọc dữ liệu exercises:', error);
+      setExercises([]);
+      setTodayExercises([]);
+      setTotalCaloriesBurned(0);
     }
-  }, [isFocused]);
+  };
+
+  // Auto-refresh data every time user focuses on home tab
+  useFocusEffect(
+    useCallback(() => {
+      if (user?.uid) {
+        console.log('HomeScreen - Tab focused, refreshing data for user:', user.email);
+        loadGoals();
+        fetchMeals();
+        fetchWaterIntake();
+        fetchExercises();
+      } else {
+        console.log('HomeScreen - Tab focused but no user, clearing data');
+        setTodayMeals([]);
+        setTotalCalories(0);
+        setTotalProtein(0);
+        setTotalCarbs(0);
+        setTotalFat(0);
+        setTotalWater(0);
+        setExercises([]);
+        setTodayExercises([]);
+        setTotalCaloriesBurned(0);
+      }
+    }, [user?.uid])
+  );
+
+  // Reload goals when userProfile changes (when updated through PersonalInfoModal)
+  useEffect(() => {
+    if (userProfile?.goals) {
+      console.log('HomeScreen - UserProfile goals updated, reloading goals');
+      loadGoals();
+    }
+  }, [userProfile?.goals]);
+
+  // Listen for meal updates from other tabs
+  // useEffect(() => {
+  //   if (user?.uid && mealVersion > 0) {
+  //     console.log('HomeScreen - Meal update detected, version:', mealVersion);
+  //     fetchMeals();
+  //   }
+  // }, [mealVersion, user?.uid]);
 
   const progressPercentage = Math.min((totalCalories / dailyGoals.calories) * 100, 100);
+  
+  // Tính cân bằng calo bao gồm hoạt động thể thao
+  const getCalorieBalance = () => {
+    const consumed = totalCalories;
+    const burned = totalCaloriesBurned;
+    const balance = consumed - burned;
+    return {
+      consumed,
+      burned,
+      balance,
+      isDeficit: balance < 0,
+      isSurplus: balance > 0,
+    };
+  };
+
+  const calorieBalance = getCalorieBalance();
   const getCurrentDate = () => {
     const today = new Date();
     return today.toLocaleDateString('vi-VN', { 
@@ -230,8 +435,90 @@ export default function HomeScreen() {
             <Text style={styles.caloriesGoal}>
               Mục tiêu: {dailyGoals.calories} kcal
             </Text>
+            {totalCaloriesBurned > 0 && (
+              <Text style={styles.caloriesBurned}>
+                🔥 Đã đốt: {totalCaloriesBurned} kcal
+              </Text>
+            )}
           </View>        </View>
       </View>
+
+      {/* Calorie Balance Section */}
+      {totalCaloriesBurned > 0 && (
+        <View style={styles.calorieBalanceSection}>
+          <View style={styles.balanceCard}>
+            <View style={styles.balanceHeader}>
+              <Ionicons name="scale" size={24} color={colors.primary} />
+              <Text style={styles.balanceTitle}>Cân bằng calo hôm nay</Text>
+            </View>
+            
+            <View style={styles.balanceStats}>
+              <View style={styles.balanceItem}>
+                <View style={styles.balanceIcon}>
+                  <Ionicons name="restaurant" size={16} color={colors.calories} />
+                </View>
+                <Text style={styles.balanceLabel}>Tiêu thụ</Text>
+                <Text style={[styles.balanceValue, { color: colors.calories }]}>
+                  {calorieBalance.consumed} kcal
+                </Text>
+              </View>
+              
+              <View style={styles.balanceDivider} />
+              
+              <View style={styles.balanceItem}>
+                <View style={styles.balanceIcon}>
+                  <Ionicons name="flame" size={16} color={colors.warning} />
+                </View>
+                <Text style={styles.balanceLabel}>Đốt cháy</Text>
+                <Text style={[styles.balanceValue, { color: colors.warning }]}>
+                  {calorieBalance.burned} kcal
+                </Text>
+              </View>
+            </View>
+            
+            <View style={[
+              styles.balanceResult,
+              {
+                backgroundColor: calorieBalance.isDeficit ? colors.success + '15' : 
+                               calorieBalance.isSurplus ? colors.error + '15' : colors.info + '15'
+              }
+            ]}>
+              <Ionicons 
+                name={calorieBalance.isDeficit ? "trending-down" : 
+                      calorieBalance.isSurplus ? "trending-up" : "remove"} 
+                size={20} 
+                color={calorieBalance.isDeficit ? colors.success : 
+                       calorieBalance.isSurplus ? colors.error : colors.info} 
+              />
+              <Text style={[
+                styles.balanceResultText,
+                {
+                  color: calorieBalance.isDeficit ? colors.success : 
+                         calorieBalance.isSurplus ? colors.error : colors.info
+                }
+              ]}>
+                {calorieBalance.balance > 0 ? '+' : ''}{calorieBalance.balance} kcal
+              </Text>
+            </View>
+            
+            {calorieBalance.isDeficit && (
+              <Text style={styles.balanceNote}>
+                🎯 Bạn đang thiếu hụt calo - tốt cho giảm cân!
+              </Text>
+            )}
+            {calorieBalance.isSurplus && (
+              <Text style={styles.balanceNote}>
+                ⚠️ Bạn tiêu thụ nhiều hơn đốt cháy - có thể tăng cân
+              </Text>
+            )}
+            {Math.abs(calorieBalance.balance) <= 50 && (
+              <Text style={styles.balanceNote}>
+                ✅ Cân bằng calo tốt - duy trì cân nặng hiện tại
+              </Text>
+            )}
+          </View>
+        </View>
+      )}
 
       {/* Enhanced Nutrition Overview */}
       <View style={styles.nutritionOverview}>
@@ -739,6 +1026,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textSecondary,
     marginTop: 4,
+  },
+  caloriesBurned: {
+    fontSize: 14,
+    color: colors.warning,
+    marginTop: 4,
+    fontWeight: '600',
   },
   // Enhanced Nutrition Overview Styles
   nutritionOverview: {
@@ -1262,5 +1555,84 @@ const styles = StyleSheet.create({
   },
   nutritionDetails: {
     flex: 1,
+  },
+  // Calorie Balance Section Styles
+  calorieBalanceSection: {
+    paddingHorizontal: 20,
+    marginBottom: 24,
+  },
+  balanceCard: {
+    backgroundColor: colors.card,
+    borderRadius: 20,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  balanceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  balanceTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    marginLeft: 12,
+  },
+  balanceStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  balanceItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  balanceIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.backgroundSecondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  balanceLabel: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  balanceValue: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  balanceDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: colors.border,
+    marginHorizontal: 20,
+  },
+  balanceResult: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  balanceResultText: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginLeft: 8,
+  },
+  balanceNote: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
 });
